@@ -195,9 +195,8 @@ def process_file(mp3_path: Path):
 
     # --- subtitles ---
     if 'subtitles' in requested_steps:
+        json_file = Path(args.use_custom_json) if args.use_custom_json else next(whisper_out.glob("*.json"))
         subtitles_step(json_file, ass_file, args.force)
-    elif not ass_file.exists():
-        raise FileNotFoundError("Missing ASS file")
 
     # --- visualizer ---
     if 'visualizer' in requested_steps:

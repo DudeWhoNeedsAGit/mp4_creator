@@ -2,4 +2,6 @@ mp3/
 output/
 out/
 .venv/
+venv-aeneas/
 .env
+src/__pycache__/

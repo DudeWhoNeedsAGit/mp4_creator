@@ -17,19 +17,24 @@ def ass_from_json(json_path: Path, ass_path: Path, font="DejaVu Sans", fontsize=
     with open(json_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
-    # Handle both WhisperX dict and direct list of segments
+    # Detect segments: WhisperX vs Aeneas
     if isinstance(data, list):
         segments = data
+    elif "segments" in data:  # WhisperX
+        segments = data["segments"]
+    elif "fragments" in data:  # Aeneas
+        segments = data["fragments"]
     else:
-        segments = data.get("segments", [])
+        segments = []
 
-    # Rest unchanged...
     def fmt_time_sec(t):
+        t = float(t)  # <-- add this
         h = int(t // 3600)
         m = int((t % 3600) // 60)
         s = int(t % 60)
         cs = int((t - int(t)) * 100)
         return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
+
 
     lines = [f"""[Script Info]
 ScriptType: v4.00+
@@ -46,23 +51,32 @@ Format: Layer, Start, End, Style, Text
 """]
 
     for seg in segments:
-        words = seg.get("words", [])
-        if not words:
-            continue
-        start_sec = words[0]["start"]
-        end_sec = words[-1]["end"]
-        line_text = []
-        for i, w in enumerate(words):
-            dur_cs = int((w["end"] - w["start"]) * 100)
-            word_clean = w["word"].strip().replace("{","").replace("}","")
-            style = "Highlight" if i == len(words)-1 else "Lyrics"
-            line_text.append(f"{{\\k{dur_cs}}}{word_clean} ")
-        dialogue = f"Dialogue: 0,{fmt_time_sec(start_sec)},{fmt_time_sec(end_sec)},Lyrics,{''.join(line_text)}"
-        lines.append(dialogue)
+        if "words" in seg:  # WhisperX
+            words = seg["words"]
+            if not words:
+                continue
+            start_sec = words[0]["start"]
+            end_sec = words[-1]["end"]
+            line_text = []
+            for i, w in enumerate(words):
+                dur_cs = int((w["end"] - w["start"]) * 100)
+                word_clean = w["word"].strip().replace("{","").replace("}","")
+                style = "Highlight" if i == len(words)-1 else "Lyrics"
+                line_text.append(f"{{\\k{dur_cs}}}{word_clean} ")
+            dialogue = f"Dialogue: 0,{fmt_time_sec(start_sec)},{fmt_time_sec(end_sec)},Lyrics,{''.join(line_text)}"
+            lines.append(dialogue)
+
+        elif "begin" in seg and "end" in seg:  # Aeneas
+            start_sec = seg["begin"]
+            end_sec = seg["end"]
+            text = " ".join(seg.get("lines", []))
+            dialogue = f"Dialogue: 0,{fmt_time_sec(start_sec)},{fmt_time_sec(end_sec)},Lyrics,{text}"
+            lines.append(dialogue)
 
     ass_path.parent.mkdir(exist_ok=True, parents=True)
     with open(ass_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
+
 
 def get_audio_duration(path):
     output = subprocess.check_output([
