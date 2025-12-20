@@ -1,7 +1,31 @@
+# --- Project Specific Outputs ---
+# These are your heavy media and temporary processing folders
 mp3/
 output/
 out/
+
+# --- Virtual Environments ---
 .venv/
 venv-aeneas/
+env/
+venv/
+ENV/
+
+# --- Python Clutter ---
+__pycache__/
+*.py[cod]
+*$py.class
+.ipynb_checkpoints/
+
+# --- Environment Secrets ---
 .env
-src/__pycache__/
+.flaskenv
+
+# --- IDE & System Files ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# --- Log files ---
+*.log

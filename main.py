@@ -78,49 +78,29 @@ def beats_step(norm_path: Path, whisper_out: Path, force: bool) -> np.ndarray:
     return beat_times
 
 # In transcription_step:
+# In main.py, inside transcription_step:
 def transcription_step(vocals_path: Path, whisper_out: Path, force: bool, custom_json: str | None) -> Path:
-    if custom_json:
-        custom_path = Path(custom_json)
-        if custom_path.exists():
-            target_json = whisper_out / "custom_vocals.json"
-            target_json.write_bytes(custom_path.read_bytes())
-            logger.info(f"Using custom aligned JSON: {custom_path} → {target_json}")
-            return target_json
-        else:
-            logger.warning(f"Custom JSON not found: {custom_json}")
+    target_json = whisper_out / "aligned_vocals.json"
+    lyrics_txt = Path("mp3/ANAMNESIS CORPUS_hbr.txt") # Or your logic to find lyrics
 
-    if any(whisper_out.glob("*.json")) and not force:
-        logger.info("Using existing WhisperX output")
-        json_files = list(whisper_out.glob("*.json"))
-    else:
-        logger.info("Running WhisperX transcription")
-        cmd = [
-            "whisperx", str(vocals_path),
-            "--model", "large-v3",
-            "--language", "en",
-            "--device", "cuda",
-            "--vad_onset", "0.1",
-            "--vad_offset", "0.1",
-            "--chunk_size", "5",
-            "--compute_type", "float16",
-            "--output_format", "json",
-            "--output_dir", str(whisper_out)
-        ]
-        subprocess.run(cmd, check=True)
-        json_files = list(whisper_out.glob("*.json"))
+    if target_json.exists() and not force:
+        return target_json
 
-    if not json_files:
-        raise FileNotFoundError("No JSON produced")
-    json_file = json_files[0]
-    logger.info(f"Using JSON: {json_file}")
-    return json_file
+    logger.info("Running Torchaudio Forced Alignment")
+    segments = get_lyrics_alignment(vocals_path, lyrics_txt)
+    
+    with open(target_json, "w", encoding="utf-8") as f:
+        json.dump(segments, f, ensure_ascii=False, indent=2)
+        
+    return target_json
 
-def subtitles_step(json_file: Path, ass_file: Path, force: bool) -> None:
+def subtitles_step(json_file: Path, ass_file: Path, force: bool, beat_file: Path = None) -> None:
     if ass_file.exists() and not force:
         logger.info(f"Using existing ASS: {ass_file}")
         return
     logger.info("Generating ASS subtitles")
-    ass_from_json(json_file, ass_file)
+    ass_from_json(json_file, ass_file, beat_file=beat_file)
+
 
 def visualizer_step(norm_path: Path, beat_times: np.ndarray, frame_dir: Path, force: bool) -> None:
     frame_dir.mkdir(exist_ok=True)
@@ -151,7 +131,6 @@ def render_step(frame_dir: Path, norm_path: Path, ass_file: Path, mp4_path: Path
     ]
     subprocess.run(cmd, check=True)
     logger.info(f"Done: {mp4_path.name}")
-
 def process_file(mp3_path: Path):
     basename = mp3_path.stem
     mp4_path = MP4_DIR / f"{basename}.mp4"
@@ -182,8 +161,10 @@ def process_file(mp3_path: Path):
     # --- beats ---
     if 'beats' in requested_steps:
         beat_times = beats_step(norm_path, whisper_out, args.force)
-    else:
+    elif beat_file.exists():
         beat_times = np.array(json.loads(beat_file.read_text()))
+    else:
+        beat_times = None
 
     # --- transcription ---
     if 'transcription' in requested_steps:
@@ -191,12 +172,11 @@ def process_file(mp3_path: Path):
             vocals_path, whisper_out, args.force, args.use_custom_json
         )
     else:
-        json_file = next(whisper_out.glob("*.json"))
+        json_file = Path(args.use_custom_json) if args.use_custom_json else next(whisper_out.glob("*.json"))
 
     # --- subtitles ---
     if 'subtitles' in requested_steps:
-        json_file = Path(args.use_custom_json) if args.use_custom_json else next(whisper_out.glob("*.json"))
-        subtitles_step(json_file, ass_file, args.force)
+        subtitles_step(json_file, ass_file, args.force, beat_file=beat_file)
 
     # --- visualizer ---
     if 'visualizer' in requested_steps:
