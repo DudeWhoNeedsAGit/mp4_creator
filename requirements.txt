@@ -1,0 +1,21 @@
+# Core
+numpy<2
+torch==2.2.2+cu121
+torchaudio==2.2.2+cu121
+
+# WhisperX stack
+whisperx
+faster-whisper
+
+# Audio analysis / SFX
+librosa
+scipy
+soundfile
+
+# MP4 / Video utilities
+ffmpeg-python
+demucs
+
+# Utilities
+tqdm
+matplotlib  # optional, for debugging / visualizer preview
