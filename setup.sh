@@ -14,8 +14,8 @@ sudo apt install -y \
     libasound2-dev
 
 # Create venv with Python 3.11
-python3.11 -m venv .venv
-source .venv/bin/activate
+python3.11 -m venv venv
+source venv/bin/activate
 
 # Upgrade tooling
 pip install --upgrade pip setuptools wheel
