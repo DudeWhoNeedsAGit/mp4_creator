@@ -171,11 +171,14 @@ def process_file(mp3_path: Path):
     # --- Background Discovery Logic ---
     # Priority: 1. song_loop.mp4 | 2. song.png | 3. bg.png
     loop_video = MP3_DIR / f"{basename}_loop.mp4"
+    loopmr_video = MP3_DIR / f"{basename}_loopmr.mp4"
     song_image = MP3_DIR / f"{basename}.png"
     default_bg = MP3_DIR / "bg.png"
 
     if loop_video.exists():
         bg_source = loop_video
+    elif loopmr_video.exists():
+        bg_source= loopmr_video
     elif song_image.exists():
         bg_source = song_image
     elif default_bg.exists():
@@ -224,6 +227,9 @@ def process_file(mp3_path: Path):
 
     # if 'render' in requested_steps:
     #     render_step(frame_dir, norm_path, ass_file, mp4_path, bg_source)
+    # In main.py
+    THEME = "neon_pulse" # Or "lofi_minimal" from your JSON
+
     if 'render' in requested_steps:
         run_integrated_render(
             audio_path=norm_path,
@@ -231,7 +237,8 @@ def process_file(mp3_path: Path):
             bg_source=bg_source,
             output_path=mp4_path,
             resolution=VIDEO_RES,
-            fps=FPS
+            fps=FPS,
+            theme_name=THEME  # Pass the theme here
         )
 
 def main():

@@ -1,0 +1,58 @@
+{
+        "neon_puls": {
+            "type": "neon_puls",
+            "n_bars": 72,
+            "base_radius": 120,
+            "bar_width": 4,
+            "sensitivity": 1.5,
+            "decay": 0.85,
+            "palette": [
+                [0, 255, 255],
+                [255, 0, 255],
+                [0, 255, 127]
+            ]
+    },
+    "neon_circle": {
+        "type": "circular_bars",
+        "n_bars": 72,
+        "base_radius": 110,
+        "bar_width": 4,
+        "sensitivity": 12.0,
+        "decay": 0.92,
+        "palette": [[255, 230, 0], [0, 255, 255]]
+    },
+    "floating_orbs": {
+        "type": "floating_orbs",
+        "n_orbs": 7,
+        "base_size": 40,
+        "sensitivity": 18.0,
+        "decay": 0.90,
+        "palette": [[255, 0, 150], [0, 255, 255], [255, 255, 255]]
+    },
+    "deep_cinema": {
+        "type": "circular_bars",
+        "n_bars": 160,
+        "base_radius": 140,
+        "bar_width": 1,
+        "sensitivity": 25.0,
+        "decay": 0.88,
+        "min_bar": 1,
+        "palette": [[255, 255, 255], [0, 180, 255]]
+    },    
+    "cyber_particles": {
+        "type": "particle_flow",
+        "n_bars": 250,
+        "y_position": 420,
+        "sensitivity": 35.0,
+        "decay": 0.75,
+        "bar_width": 1,
+        "palette": [[0, 255, 255]]
+    },
+    "dev": {
+    "type": "dev_mode",
+    "n_bars": 40,
+    "sensitivity": 1.0,
+    "decay": 0.0,
+    "palette": [[255, 255, 255]]
+}
+}

@@ -1,7 +1,8 @@
-# Core
-numpy<2
-torch==2.2.2+cu121
-torchaudio==2.2.2+cu121
+# Core (Aligned with your CUDA 12.1 setup)
+numpy<2.0.0
+torch==2.2.2+cu121 --index-url https://download.pytorch.org/whl/cu121
+torchaudio==2.2.2+cu121 --index-url https://download.pytorch.org/whl/cu121
+torchvision==0.17.2+cu121 --index-url https://download.pytorch.org/whl/cu121
 
 # WhisperX stack
 whisperx
@@ -16,6 +17,14 @@ soundfile
 ffmpeg-python
 demucs
 
+# AI Upscaling (New Additions)
+opencv-python        # For frame-by-frame processing
+basicsr              # Base architecture for Real-ESRGAN
+realesrgan           # The upscaling engine
+facexlib             # Dependency for many ESRGAN models
+gfpgan               # High-quality face restoration (if backgrounds have people)
+
 # Utilities
 tqdm
-matplotlib  # optional, for debugging / visualizer preview
+matplotlib
+pathlib
