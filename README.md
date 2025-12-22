@@ -39,3 +39,12 @@ The image remains perfectly static in position and shape.
 Only a subtle rhythmic pulse in brightness and glow, sine-like easing.
 Calm, minimal, seamless loop, designed for a music cover visualizer.
 Cinematic lighting, stable framing, no flicker, no artifacts.
+
+# installation fixes:
+pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu121
+
+# This fixes a known import error in the basicsr library
+sed -i 's/from torchvision.transforms.functional_tensor import rgb_to_grayscale/from torchvision.transforms.functional import rgb_to_grayscale/' $(pip show basicsr | grep Location | awk '{print $2}')/basicsr/data/degradations.py
+
+# How to verify your 4070TI Super is ready:
+python -c "import torch; print(f'GPU Found: {torch.cuda.get_device_name(0)}' if torch.cuda.is_available() else 'ERROR: GPU NOT FOUND')"
