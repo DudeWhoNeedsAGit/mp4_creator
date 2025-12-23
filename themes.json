@@ -16,12 +16,21 @@
         "bar_width": 2,
         "palette": [[0, 255, 255], [255, 0, 255], [0, 100, 255]]
     },
-    "neon_puls": {
-        "type": "neon_puls",
+    "neon_pulse_old": {
+        "type": "neon_pulse_old",
         "n_bars": 72,
         "base_radius": 120,
         "bar_width": 4,
         "sensitivity": 1.5,
+        "decay": 0.85,
+        "palette": [[0, 255, 255], [255, 0, 255], [0, 255, 127]]
+    },
+    "neon_pulse_numba": {
+        "type": "neon_pulse_numba",
+        "n_bars": 80,
+        "base_radius": 120,
+        "bar_width": 4,
+        "sensitivity": 1.2,
         "decay": 0.85,
         "palette": [[0, 255, 255], [255, 0, 255], [0, 255, 127]]
     },
@@ -42,15 +51,14 @@
         "decay": 0.90,
         "palette": [[255, 0, 150], [0, 255, 255], [255, 255, 255]]
     },
-    "deep_cinema": {
+    "circular_bars": {
         "type": "circular_bars",
-        "n_bars": 160,
-        "base_radius": 140,
-        "bar_width": 1,
+        "n_bars": 120,
+        "base_radius": 130,
+        "bar_width": 3,
         "sensitivity": 25.0,
-        "decay": 0.88,
-        "min_bar": 1,
-        "palette": [[255, 255, 255], [0, 180, 255]]
+        "decay": 0.85,
+        "palette": [[0, 255, 255], [176, 38, 255]] 
     },    
     "cyber_particles": {
         "type": "particle_flow",

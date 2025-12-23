@@ -1,32 +1,76 @@
 {
-    "DEUS_SILENTIUM": {
-        "highlight": "#F30808",
-        "font_size": 14,
-        "note": "Blood Red - High Aggression"
+    "DESIGN_STYLES": {
+        "RED_ALERT": {
+            "highlight": "#F30808",
+            "font_size": 21,
+            "note": "Blood Red - High Aggression"
+        },
+        "TOXIC": {
+            "highlight": "#39FF14",
+            "font_size": 21,
+            "note": "Toxic Waste Green"
+        },
+        "VOID_ECHO": {
+            "highlight": "#707070",
+            "font_size": 21,
+            "note": "Ghost Gray - Low Visibility"
+        },
+        "PLASMA_CORE": {
+            "highlight": "#0080FF",
+            "font_size": 21,
+            "note": "Deep Cobalt Blue"
+        },
+        "ERROR_CRITICAL": {
+            "highlight": "#FF4500",
+            "font_size": 21,
+            "note": "Orange-Red Alert"
+        },
+        "NEON_PULSE_PINK": {
+            "highlight": "#FF10F0",
+            "font_size": 21,
+            "note": "Cyber Pink - High Contrast Neon"
+        },
+        "NEON_PULSE_LILA": {
+            "highlight": "#B026FF",
+            "font_size": 21
+    }
     },
-    "ABOMINATIO_SYSTEMA___IGNIS_VERBI": {
-        "highlight": "#39FF14",
-        "font_size": 35,
-        "note": "Toxic Waste Green"
+    "ESTHER.EXE": {
+            "highlight": "#B026FF",
+            "font_size": 27,
+            "upscale": true,
+            "theme": "neon_pulse_numba"
     },
-    "VOID_ECHO": {
-        "highlight": "#707070",
-        "font_size": 18,
-        "note": "Ghost Gray - Low Visibility"
+    "ANAMNESIS_CORPUS_HBR": {
+            "highlight": "#FF10F0",
+            "font_size": 21,
+            "upscale": true,
+            "theme": "neon_puls"
     },
     "EVA": {
         "highlight": "#FFD700",
         "font_size": 25,
         "note": "Gold - Divine Contrast"
     },
-    "PLASMA_CORE": {
-        "highlight": "#0080FF",
-        "font_size": 16,
-        "note": "Deep Cobalt Blue"
+    "DEUS_SILENTIUM": {
+        "highlight": "#F30808",
+        "font_size": 14,
+        "note": "Blood Red - High Aggression",
+        "gallery": "True"
     },
-    "ERROR_CRITICAL": {
-        "highlight": "#FF4500",
-        "font_size": 28,
-        "note": "Orange-Red Alert"
-    }
+    "ABOMINATIO_SYSTEMA___IGNIS_VERBI": {
+        "highlight": "#39FF14",
+        "font_size": 21,
+        "note": "Blood Red - High Aggression"
+    },
+    "ABOMINATIO_SYSTEMA___IGNIS VERBI_GOTH": {
+        "highlight": "#FFD700",
+        "font_size": 21,
+        "note": "Gold - Divine Contrast"
+        },
+    "ABOMINATIO_SYSTEMA___IGNIS VERBI_LP": {
+            "highlight": "#F30808",
+            "font_size": 21,
+            "note": "Blood Red - High Aggression"
+        }
 }

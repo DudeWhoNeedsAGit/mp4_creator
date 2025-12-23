@@ -4,6 +4,8 @@ import json
 import re
 from pathlib import Path
 from torchaudio.pipelines import MMS_FA as bundle
+import logging
+logger = logging.getLogger(__name__)
 
 # --- GLOBAL MODEL CONFIG ---
 # We load this once at the module level so it stays in VRAM during batch processing
@@ -47,6 +49,7 @@ def get_lyrics_alignment(vocals_path: Path, lyrics_file: Path, max_words_per_lin
             # Use original punctuation for the video, but uppercase for "Viral" look
             words_to_render.append(w.upper())
 
+    logger.info(f"✨ PHASE 1: Transcription - Inference started ...")
     # 3. Model Inference
     with torch.inference_mode():
         emission, _ = model(waveform.to(device))
@@ -103,7 +106,11 @@ def get_lyrics_alignment(vocals_path: Path, lyrics_file: Path, max_words_per_lin
             
     return segments
 
-def ass_from_json(json_path, ass_path, beat_file=None, font="Arial Black", fontsize=32, resolution="854x480"):
+def ass_from_json(json_path, ass_path, beat_file=None, font="Arial Black", fontsize=32, resolution="854x480", song_key=None, highlight=None):
+    """
+    Generates an ASS subtitle file with karaoke effects and dynamic scaling.
+    Accepts an optional 'highlight' hex string to bypass internal config lookup.
+    """
     import json
     import logging
     from pathlib import Path
@@ -121,33 +128,38 @@ def ass_from_json(json_path, ass_path, beat_file=None, font="Arial Black", fonts
     with open(json_p, "r", encoding="utf-8") as f:
         segments = json.load(f)
 
-    # 2. Key Discovery Logic
-    config_path = Path("mp3_configs.json")
-    raw_stem = json_p.stem
-    search_origin = json_p.parent.name if raw_stem.lower() == "aligned_vocals" else raw_stem
-    song_key = search_origin.replace("_norm", "").replace("_norm".upper(), "").replace(" ", "_").replace("-", "_").upper()
-    
-    highlight_hex = "#00E6FF"
+    # 2. Key Discovery & Config Loading
+    # If highlight is provided from processor.py, we use it. 
+    # Otherwise, we perform the internal lookup.
+    highlight_hex = highlight if highlight else "#00E6FF"
     final_fontsize = fontsize
-    match_found = False
+    config_path = Path("mp3_configs.json")
 
-    # 3. Config Loading Logic
-    if config_path.exists():
+    if highlight is None and config_path.exists():
+        raw_stem = json_p.stem
+        search_origin = json_p.parent.name if raw_stem.lower() == "aligned_vocals" else raw_stem
+        if song_key is None:
+            song_key = search_origin.replace("_norm", "").replace("_norm".upper(), "").replace(" ", "_").replace("-", "_").upper()
+        
         try:
             with open(config_path, "r") as f:
                 all_configs = json.load(f)
+                # Flexible lookup
                 conf = all_configs.get(song_key, next((all_configs[k] for k in all_configs if k in song_key), {}))
                 if conf:
                     highlight_hex = conf.get("highlight", highlight_hex)
-                    # Use provided fontsize if config doesn't have one
                     final_fontsize = conf.get("font_size", final_fontsize)
-                    match_found = True
+                    logger.info(f"✅ Found internal highlight_hex: {highlight_hex}")
         except Exception as e:
             logger.error(f"Error reading {config_path}: {e}")
+    else:
+        if highlight:
+            logger.info(f"🎨 Using injected highlight: {highlight}")
 
     # 4. Color Conversion (BGR for ASS)
     def hex_to_ass(h):
         h = h.lstrip('#')
+        # Standard Hex is RGB, ASS is BGR
         r, g, b = h[0:2], h[2:4], h[4:6]
         return f"&H00{b}{g}{r}"
 
@@ -159,24 +171,22 @@ def ass_from_json(json_path, ass_path, beat_file=None, font="Arial Black", fonts
     else:
         res_x, res_y = map(int, resolution.split('x'))
 
-    # DYNAMIC SCALING: Adjust for 1080p canvas
-    # If res_y is 1080, we are roughly 2.25x larger than 480p.
+    # DYNAMIC SCALING: Adjust for higher resolutions (e.g. 1080p)
     scale_factor = res_y / 480.0
     
-    # Apply scaling to the fontsize if it wasn't already scaled by the caller
-    # (Checking if the value seems small for a 1080p canvas)
+    # Apply scaling to the fontsize if it hasn't been scaled by the caller
     if res_y > 720 and final_fontsize < 40:
         final_fontsize = int(final_fontsize * scale_factor)
 
-    # Calculate positioning based on scaled resolution
+    # Calculate positioning 
     center_y = res_y - int(100 * scale_factor) 
-    line_spacing = int((final_fontsize + 15) * 1.1) # Extra breathing room for larger fonts
+    line_spacing = int((final_fontsize + 15) * 1.1) 
     outline_thickness = max(1, int(2 * scale_factor))
     shadow_depth = max(1, int(1 * scale_factor))
 
     total_duration = segments[-1]["words"][-1]["end"] + 5.0 if segments else 300.0
 
-    # 6. Build .ASS Header with PlayRes and ScaledBorder
+    # 6. Build .ASS Header
     lines = [f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {res_x}
@@ -228,3 +238,4 @@ Format: Layer, Start, End, Style, Text
     ass_path.parent.mkdir(exist_ok=True, parents=True)
     with open(ass_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
+    return True

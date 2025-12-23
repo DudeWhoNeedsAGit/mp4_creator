@@ -33,43 +33,45 @@ def load_visualizer_theme(theme_name):
         }
 
 # --- NEW: KINETIC NEBULA KERNELS ---
+@njit(fastmath=True)
+def lerp_color(palette, t):
+    """Calculates the smooth color transition at position t (0.0 to 1.0)."""
+    num_colors = len(palette)
+    # Map t to the palette index space
+    idx = t * (num_colors - 1)
+    i = int(idx)
+    f = idx - i  # Fraction between color i and i+1
+    
+    c1 = palette[i]
+    c2 = palette[min(i + 1, num_colors - 1)]
+    
+    r = uint8(c1[0] * (1 - f) + c2[0] * f)
+    g = uint8(c1[1] * (1 - f) + c2[1] * f)
+    b = uint8(c1[2] * (1 - f) + c2[2] * f)
+    return r, g, b
+
 
 @njit(fastmath=True)
 def draw_line_fast(pixels, x0, y0, x1, y1, width, r, g, b):
-    """
-    Helper: Draws a thick anti-aliased line efficiently.
-    """
-    h_screen, w_screen, _ = pixels.shape
+    h_img, w_img, _ = pixels.shape
+    dx, dy = x1 - x0, y1 - y0
+    length = np.sqrt(dx*dx + dy*dy)
+    if length == 0: return
     
-    # Calculate bounding box to limit loops
-    min_x = max(0, int(min(x0, x1) - width))
-    max_x = min(w_screen, int(max(x0, x1) + width))
-    min_y = max(0, int(min(y0, y1) - width))
-    max_y = min(h_screen, int(max(y0, y1) + width))
+    ux, uy = dx/length, dy/length
+    px, py = -uy * (width/2), ux * (width/2)
     
-    vx, vy = x1 - x0, y1 - y0
-    len_sq = vx*vx + vy*vy
-    if len_sq < 0.01: return
-
-    for y in range(min_y, max_y):
-        for x in range(min_x, max_x):
-            # Distance from pixel to line segment
-            px, py = float(x), float(y)
-            t = max(0.0, min(1.0, ((px - x0) * vx + (py - y0) * vy) / len_sq))
-            proj_x = x0 + t * vx
-            proj_y = y0 + t * vy
-            dist_sq = (px - proj_x)**2 + (py - proj_y)**2
-            
-            # Sharp Core + Soft Edge
-            if dist_sq < width*width:
-                dist = np.sqrt(dist_sq)
-                alpha = max(0.0, 1.0 - (dist / width)) # Linear fade for smoothness
-                
-                # Additive Blending (Neon look)
-                pixels[y, x, 0] = uint8(min(255, pixels[y, x, 0] + r * alpha))
-                pixels[y, x, 1] = uint8(min(255, pixels[y, x, 1] + g * alpha))
-                pixels[y, x, 2] = uint8(min(255, pixels[y, x, 2] + b * alpha))
-                pixels[y, x, 3] = 255
+    min_x, max_x = max(0, int(min(x0, x1) - abs(px))), min(w_img-1, int(max(x0, x1) + abs(px)))
+    min_y, max_y = max(0, int(min(y0, y1) - abs(py))), min(h_img-1, int(max(y0, y1) + abs(py)))
+    
+    for y in range(min_y, max_y + 1):
+        for x in range(min_x, max_x + 1):
+            pax, pay = x - x0, y - y0
+            t = (pax * ux + pay * uy) / length
+            if 0 <= t <= 1:
+                dist = abs(pax * (-uy) + pay * ux)
+                if dist <= width / 2:
+                    pixels[y, x, 0], pixels[y, x, 1], pixels[y, x, 2], pixels[y, x, 3] = r, g, b, 255
 
 @njit(parallel=True, fastmath=True)
 def render_neon_circle_crisp(pixels, n_bars, base_r, bar_heights, colors, center, bar_width):
@@ -89,27 +91,49 @@ def render_neon_circle_crisp(pixels, n_bars, base_r, bar_heights, colors, center
         draw_line_fast(pixels, x0, y0, x1, y1, bar_width, colors[b,0], colors[b,1], colors[b,2])
 
 @njit(parallel=True, fastmath=True)
-def draw_bars_fast(pixels, n_bars, base_r, bar_heights, colors, center, bar_w):
-    """
-    Numba-accelerated line drawing. 
-    'pixels' is a (height, width, 4) uint8 numpy array.
-    """
-    h, w, _ = pixels.shape
+def render_circular_bars_numba(pixels, n_bars, base_r, bar_heights, palette, center, bar_w):
+    cx, cy = center
+    for b in prange(n_bars):
+        t = b / n_bars
+        r, g, b_v = lerp_color(palette, t)
+        
+        angle = b * (2 * np.pi / n_bars) - np.pi / 2
+        cos_a, sin_a = np.cos(angle), np.sin(angle)
+        h = bar_heights[b]
+        
+        x0, y0 = cx + base_r * cos_a, cy + base_r * sin_a
+        x1, y1 = cx + (base_r + h) * cos_a, cy + (base_r + h) * sin_a
+
+        # --- CINEMA DRAWING LAYERS ---
+        # 1. Outer Glow (Wider, dimmer)
+        draw_line_fast(pixels, x0, y0, x1, y1, bar_w + 2, r * 0.4, g * 0.4, b_v * 0.4)
+        
+        # 2. Inner Core (Sharper, whiter)
+        r_c = min(255.0, float(r) + 40.0)
+        g_c = min(255.0, float(g) + 40.0)
+        b_c = min(255.0, float(b_v) + 40.0)
+        draw_line_fast(pixels, x0, y0, x1, y1, bar_w, r_c, g_c, b_c)
+
+@njit(parallel=True, fastmath=True)
+def render_neon_puls_numba(pixels, n_bars, base_r, bar_heights, palette, center, bar_w):
+    """Numba port of your 'Good' PIL logic. Linear and sharp."""
     cx, cy = center
     
     for b in prange(n_bars):
+        # 1. Smooth Color Logic
+        t = b / n_bars  # Progress around the circle (0.0 to 1.0)
+        r, g, b_v = lerp_color(palette, t)
+        
+        # 2. Geometry
         angle = b * (2 * np.pi / n_bars) - np.pi / 2
         cos_a, sin_a = np.cos(angle), np.sin(angle)
+        h = bar_heights[b]
         
-        # Calculate start and end points
-        h_val = bar_heights[b]
         x0, y0 = cx + base_r * cos_a, cy + base_r * sin_a
-        x1, y1 = cx + (base_r + h_val) * cos_a, cy + (base_r + h_val) * sin_a
+        x1, y1 = cx + (base_r + h) * cos_a, cy + (base_r + h) * sin_a
         
-        # Simple Bresenham-like line drawing (Simplified for speed)
-        # In a real kernel, you'd iterate from x0,y0 to x1,y1 
-        # and set pixels[y, x] = color
-        draw_line_kernel(pixels, x0, y0, x1, y1, colors[b], bar_w)
+        # 3. Draw Sharp Bar
+        draw_line_fast(pixels, x0, y0, x1, y1, bar_w, r, g, b_v)   
 
 @njit(fastmath=True)
 def draw_line_kernel(img, x0, y0, x1, y1, color, width):
@@ -139,25 +163,20 @@ def draw_line_kernel(img, x0, y0, x1, y1, color, width):
         x += x_inc
         y += y_inc
 
-@njit(parallel=True, fastmath=True)
-def apply_ghosting_and_composite(trail_buf, current_buf, decay=0.7):
-    """
-    Combined Ghosting & Composition.
-    This replaces the heavy PIL alpha_composite.
-    """
-    h, w, c = trail_buf.shape
+@njit(parallel=True)
+def apply_ghosting_and_composite(trail, current, decay=0.7):
+    h, w, _ = trail.shape
     for y in prange(h):
         for x in range(w):
-            # If current_buf has a pixel (alpha > 0), we use it.
-            # Otherwise, we decay the trail.
-            if current_buf[y, x, 3] > 0:
-                trail_buf[y, x, 0] = current_buf[y, x, 0]
-                trail_buf[y, x, 1] = current_buf[y, x, 1]
-                trail_buf[y, x, 2] = current_buf[y, x, 2]
-                trail_buf[y, x, 3] = 255
+            if current[y, x, 3] > 0:
+                trail[y, x, :] = current[y, x, :]
             else:
-                for i in range(c):
-                    trail_buf[y, x, i] = uint8(trail_buf[y, x, i] * decay)
+                trail[y, x, 0] = uint8(trail[y, x, 0] * decay)
+                trail[y, x, 1] = uint8(trail[y, x, 1] * decay)
+                trail[y, x, 2] = uint8(trail[y, x, 2] * decay)
+                # Purge shadows
+                if trail[y, x, 0] < 12 and trail[y, x, 1] < 12 and trail[y, x, 2] < 12:
+                    trail[y, x, :] = 0
 
 @njit(fastmath=True)
 def draw_line_numba(img, x0, y0, x1, y1, r, g, b, a, width):
@@ -426,10 +445,11 @@ def draw_floating_orbs(draw, cfg, spectrum, smooth_amp, resolution):
 # Note: We keep the old ones for compatibility, 
 # but Numba will now handle the "heavy" types.
 VIS_MAP = {
-    "circular_bars": draw_bars_fast, # Your existing Numba bar logic
+    "circular_bars": render_circular_bars_numba, # Your existing Numba bar logic
     "cyber_horizon": render_cyber_horizon, 
     "neon_circle": render_neon_circle_crisp, # The new Field Kernel
-    "neon_pulse": draw_bars_fast,
+    "neon_pulse_numba": render_circular_bars_numba,
+    "neon_pulse_old": draw_neon_puls,
     "particle_flow": draw_particle_flow, # Note: These PIL ones will be slower
     "floating_orbs": draw_floating_orbs
 }
@@ -492,90 +512,60 @@ def stream_visualizer_frames(audio_path, theme_name, fps, resolution):
         final_frame = Image.alpha_composite(trail_layer, current_layer)
         
         yield final_frame.tobytes()
-# --- STEP 2: THE MAIN STREAMER ---
 
+# --- STEP 2: THE MAIN STREAMER ---
 def stream_visualizer_frames_numba(audio_path, theme_name, fps, resolution, limit_frames=None):
     import librosa
     import numpy as np
     
     cfg = load_visualizer_theme(theme_name)
-    
-    vis_type = cfg.get("type", "circular_bars") 
     width, height = resolution
+    center = (width // 2, height // 2)
     
-    # 1. Load Audio and Calculate Frame Limits
     y, sr = librosa.load(audio_path, sr=None)
     hop = sr // fps
-    
-    # n_frames represents the total available duration of the audio
     n_frames = int(len(y) / hop) + 1
     
-    # If --test-render is active, we cap the loop early
-    if limit_frames:
-        n_frames = min(n_frames, limit_frames)
-    
-    # 2. Spectrum Analysis (STFT)
     S = np.abs(librosa.stft(y, n_fft=2048, hop_length=512))
     freq_times = librosa.frames_to_time(np.arange(S.shape[1]), sr=sr, hop_length=512)
     
-    # 3. Buffers and Setup
     trail_buffer = np.zeros((height, width, 4), dtype=np.uint8)
     current_frame_buffer = np.zeros((height, width, 4), dtype=np.uint8)
     
-    n_bars = cfg.get("n_bars", 120)
-    base_r = cfg.get("base_radius", 130)
+    # Config Setup
+    n_bars = cfg.get("n_bars", 72)
+    base_r = cfg.get("base_radius", 110)
     bar_w = cfg.get("bar_width", 4)
-    palette = np.array(cfg.get("palette", [[255, 255, 255]]), dtype=np.uint8)
-    
-    bar_colors = np.zeros((n_bars, 4), dtype=np.uint8)
-    for b in range(n_bars):
-        c = palette[b % len(palette)]
-        bar_colors[b] = [c[0], c[1], c[2], 255]
-
+    palette = np.array(cfg.get("palette", [[0, 255, 255]]), dtype=np.uint8)
+    sensitivity = cfg.get("sensitivity", 12.0)
+    decay_rate = cfg.get("decay", 0.85)
     smooth_amp = 0.01
 
-    # 4. Main Rendering Loop (Capped by n_frames)
     for i in range(n_frames):
-        frame_time = i / fps
-        stft_idx = np.searchsorted(freq_times, frame_time)
+        stft_idx = np.searchsorted(freq_times, i / fps)
         current_spec = S[:, stft_idx] if stft_idx < S.shape[1] else np.zeros(S.shape[0])
         
+        # Physics (Momentum)
         start_s, end_s = i * hop, min((i+1) * hop, len(y))
         raw_amp = np.max(np.abs(y[start_s:end_s])) if start_s < len(y) else 0.01
-        
-        # Physics / Decay
-        decay_rate = cfg.get("decay", 0.92)
-        smooth_amp = max(raw_amp, smooth_amp * decay_rate)
+        if raw_amp > smooth_amp: smooth_amp = raw_amp
+        else: smooth_amp *= decay_rate
 
-        # Map Spectrum to Heights
+        # Linear Mapping & 50x Height
         bar_heights = np.zeros(n_bars, dtype=np.float32)
-        spec_len = len(current_spec) // 4 
+        spec_len = len(current_spec) // 3
         for b in range(n_bars):
-            f_idx = int(pow(b / n_bars, 1.5) * spec_len)
-            f_idx = min(f_idx, spec_len - 1)
-            val = np.log1p(current_spec[f_idx] * cfg.get("sensitivity", 20)) * smooth_amp
-            bar_heights[b] = max(2, val * 80)
+            f_idx = int((b / n_bars) * spec_len)
+            val = np.log1p(current_spec[f_idx] * sensitivity) * smooth_amp
+            bar_heights[b] = val * 50
 
+        # Draw
         current_frame_buffer.fill(0)
-        
-        # --- Dispatcher ---
-        if vis_type == "cyber_horizon":
-            render_cyber_horizon(
-                current_frame_buffer, n_bars, bar_heights, bar_colors, (width // 2, height // 2)
-            )
-        elif vis_type == "neon_circle":
-            render_neon_circle_crisp(
-                current_frame_buffer, n_bars, base_r, bar_heights, bar_colors, (width // 2, height // 2), bar_w
-            )
-        else:
-            draw_bars_fast(
-                current_frame_buffer, n_bars, base_r, bar_heights, bar_colors, (width // 2, height // 2), bar_w
-            )
+        render_neon_puls_numba(current_frame_buffer, n_bars, base_r, bar_heights, palette, center, bar_w)
 
-        # Ghosting & Final Output
-        apply_ghosting_and_composite(trail_buffer, current_frame_buffer, decay=0.85)
+        # The "Anti-Shadow" Compositor
+        apply_ghosting_and_composite(trail_buffer, current_frame_buffer, decay=0.7)
         
-        # Yield the raw bytes to the FFmpeg pipe
         yield trail_buffer.tobytes()
 
 def get_audio_metadata(audio_path):
@@ -766,9 +756,13 @@ def run_integrated_render_gpu(audio_path, ass_file, bg_source, output_path, reso
     is_video = bg_source.suffix.lower() == ".mp4"
     is_mirror_loop = "_loopmr" in bg_source.name.lower()
 
-    if is_video and not is_mirror_loop:
-        cmd += ["-stream_loop", "-1"]
-    
+    if is_video:
+        if not is_mirror_loop:
+            cmd += ["-stream_loop", "-1"]
+        # ADD THIS: Force FFmpeg to ignore any audio in the background file
+        cmd += ["-an"]
+
+
     cmd += ["-i", str(bg_source)]
 
     # Input 1: Visualizer Pipe, Input 2: Audio
@@ -786,9 +780,11 @@ def run_integrated_render_gpu(audio_path, ass_file, bg_source, output_path, reso
             f"[prep_bwd]reverse[bwd];"
             f"[fwd][bwd]concat=n=2:v=1:a=0,loop=-1:size=600[bg];"
         )
+        
     else:
         bg_chain = f"[0:v]fps={fps},scale={resolution[0]}:{resolution[1]}:force_original_aspect_ratio=increase,crop={resolution[0]}:{resolution[1]},setsar=1[bg];"
-# 4. FILTER COMPLEX
+    
+    # 4. FILTER COMPLEX
     # Logic: If ass_file is None, we are likely doing a pre-pass for upscaling.
     # We remove the drawtext filters to keep the frames clean for the AI.
     if ass_file is not None:
@@ -829,3 +825,54 @@ def run_integrated_render_gpu(audio_path, ass_file, bg_source, output_path, reso
     finally:
         process.stdin.close()
         process.wait()
+
+def run_fast_ui_overlay(clean_master_path, output_path, ass_path, metadata, base_font_size):
+    import subprocess
+    from pathlib import Path
+    import logging
+
+    logger = logging.getLogger("subtitle_gen")
+
+    # Scale metadata fonts for 1080p
+    title_fs = int(base_font_size * 1.0)
+    artist_fs = int(base_font_size * 0.9)
+    timer_fs = int(base_font_size * 0.8)
+    
+    # 1. Escape Metadata Text for drawtext
+    # drawtext requires ':' and "'" to be escaped
+    safe_title = metadata.get('title', 'Unknown').replace(":", "\\:").replace("'", "\\'")
+    safe_artist = f"by {metadata.get('artist', 'Unknown')}".replace(":", "\\:").replace("'", "\\'")
+    safe_total = metadata.get('duration_str', '00\\:00').replace(":", "\\:")
+    line_timer = f"%{{pts\\:gmtime\\:0\\:%M\\\\\\:%S}} / {safe_total}"
+    
+    # 2. THE CRITICAL PATH FIX:
+    # FFmpeg 'ass' filter needs the path to be escaped for the filter-graph
+    # We use .absolute() and then handle the string replacements
+    ass_path_str = str(Path(ass_path).absolute()).replace("\\", "/").replace(":", "\\:")
+    # Wrap in single quotes to handle spaces or dots in filenames
+    ass_filter = f"ass='{ass_path_str}'"
+
+    filters = [
+        f"drawtext=text='{safe_title}':fontcolor=white:fontsize={title_fs}:x=40:y=(h/2)-100:shadowcolor=black@0.6:shadowx=4:shadowy=4",
+        f"drawtext=text='{safe_artist}':fontcolor=white:fontsize={artist_fs}:x=40:y=(h/2)-60:alpha=0.8:shadowcolor=black@0.6:shadowx=3:shadowy=3",
+        f"drawtext=text='{line_timer}':fontcolor=white:fontsize={timer_fs}:x=40:y=(h/2)-20:alpha=0.8:shadowcolor=black@0.4:shadowx=2:shadowy=2",
+        ass_filter
+    ]
+
+    cmd = [
+        "ffmpeg", "-y", 
+        "-i", str(clean_master_path),
+        "-vf", ",".join(filters),
+        "-c:v", "h264_nvenc", "-preset", "p2", "-cq", "23", 
+        "-c:a", "copy",
+        str(output_path)
+    ]
+    
+    try:
+        # Changed to capture stderr to help diagnose if it fails again
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as e:
+        logger.error(f"FFmpeg Overlay Failed!")
+        logger.error(f"Command: {' '.join(cmd)}")
+        logger.error(f"Error Output: {e.stderr}")
+        raise e
