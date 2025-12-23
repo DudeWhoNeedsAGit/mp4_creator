@@ -1,10 +1,32 @@
 {
     "DEUS_SILENTIUM": {
-        "highlight": "#FF6EC7",
-        "font_size": 32
+        "highlight": "#F30808",
+        "font_size": 14,
+        "note": "Blood Red - High Aggression"
     },
     "ABOMINATIO_SYSTEMA___IGNIS_VERBI": {
         "highlight": "#39FF14",
-        "font_size": 35
+        "font_size": 35,
+        "note": "Toxic Waste Green"
+    },
+    "VOID_ECHO": {
+        "highlight": "#707070",
+        "font_size": 18,
+        "note": "Ghost Gray - Low Visibility"
+    },
+    "EVA": {
+        "highlight": "#FFD700",
+        "font_size": 25,
+        "note": "Gold - Divine Contrast"
+    },
+    "PLASMA_CORE": {
+        "highlight": "#0080FF",
+        "font_size": 16,
+        "note": "Deep Cobalt Blue"
+    },
+    "ERROR_CRITICAL": {
+        "highlight": "#FF4500",
+        "font_size": 28,
+        "note": "Orange-Red Alert"
     }
 }

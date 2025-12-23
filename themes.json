@@ -1,19 +1,32 @@
 {
-        "neon_puls": {
-            "type": "neon_puls",
-            "n_bars": 72,
-            "base_radius": 120,
-            "bar_width": 4,
-            "sensitivity": 1.5,
-            "decay": 0.85,
-            "palette": [
-                [0, 255, 255],
-                [255, 0, 255],
-                [0, 255, 127]
-            ]
+    "cyber_horizon": {
+        "type": "cyber_horizon",
+        "n_bars": 80,
+        "sensitivity": 22.0,
+        "decay": 0.85,
+        "bar_width": 6,
+        "palette": [[0, 255, 255], [255, 0, 255], [0, 100, 255]]
+    },
+    "kinetic_nebula": {
+        "type": "neon_circle",
+        "n_bars": 128,
+        "base_radius": 150,
+        "sensitivity": 25.0,
+        "decay": 0.88,
+        "bar_width": 2,
+        "palette": [[0, 255, 255], [255, 0, 255], [0, 100, 255]]
+    },
+    "neon_puls": {
+        "type": "neon_puls",
+        "n_bars": 72,
+        "base_radius": 120,
+        "bar_width": 4,
+        "sensitivity": 1.5,
+        "decay": 0.85,
+        "palette": [[0, 255, 255], [255, 0, 255], [0, 255, 127]]
     },
     "neon_circle": {
-        "type": "circular_bars",
+        "type": "neon_circle",
         "n_bars": 72,
         "base_radius": 110,
         "bar_width": 4,
@@ -49,10 +62,10 @@
         "palette": [[0, 255, 255]]
     },
     "dev": {
-    "type": "dev_mode",
-    "n_bars": 40,
-    "sensitivity": 1.0,
-    "decay": 0.0,
-    "palette": [[255, 255, 255]]
-}
+        "type": "dev_mode",
+        "n_bars": 40,
+        "sensitivity": 1.0,
+        "decay": 0.0,
+        "palette": [[255, 255, 255]]
+    }
 }

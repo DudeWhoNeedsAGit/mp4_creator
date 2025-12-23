@@ -1,0 +1,282 @@
+import argparse
+import subprocess
+from pathlib import Path
+import json
+import numpy as np
+import logging
+
+# New Import
+from upscaler import run_upscale 
+
+from src.audio import normalize_audio, detect_beats
+from src.transcription import ass_from_json
+from src import get_lyrics_alignment
+from src.render_engine import run_integrated_render_gpu, run_integrated_render
+
+# --- Configuration ---
+parser = argparse.ArgumentParser()
+parser.add_argument('--filename', type=str, default=None)
+parser.add_argument('--force', action='store_true')
+parser.add_argument('--steps', type=str, default=None)
+# New flag to trigger the AI Upscale pipeline
+parser.add_argument('--upscale', action='store_true', help="AI Upscale 480p -> 1080p")
+parser.add_argument('--test-render', action='store_true', help="Limit render to first 12 seconds")
+
+args = parser.parse_args()
+
+requested_steps = (
+    set(args.steps.split(',')) if args.steps
+    else {'normalize', 'vocals', 'beats', 'transcription', 'subtitles', 'render'}
+)
+
+MP3_DIR = Path("mp3")
+OUT_DIR = Path("out")
+MP4_DIR = Path("output")
+VIDEO_RES = (854, 480) # Keep base render at 480p for speed
+FPS = 30
+
+OUT_DIR.mkdir(exist_ok=True)
+MP4_DIR.mkdir(exist_ok=True)
+
+logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
+logger = logging.getLogger(__name__)
+
+# -------------------
+# Steps
+# -------------------
+
+# --- Helper for Config ---
+def load_song_config(basename):
+    config_path = Path("mp3_configs.json")
+    if config_path.exists():
+        with open(config_path, "r") as f:
+            configs = json.load(f)
+            return configs.get(basename.upper(), {})
+    return {}
+
+def normalize_step(mp3_path: Path, force: bool) -> Path:
+    norm_path = mp3_path.with_name(mp3_path.stem + "_norm.wav")
+    if norm_path.exists() and not force:
+        logger.info(f"Using existing normalized audio: {norm_path}")
+        return norm_path
+    logger.info(f"Normalizing audio: {mp3_path.name}")
+    return normalize_audio(mp3_path)
+
+def vocals_step(norm_path: Path, force: bool) -> Path:
+    vocals_dir = norm_path.parent / "htdemucs" / norm_path.stem
+    vocals_path = vocals_dir / "vocals.wav"
+    if vocals_path.exists() and not force:
+        logger.info(f"Using existing vocals: {vocals_path}")
+        return vocals_path
+    logger.info("Separating vocals with Demucs")
+    subprocess.run(["demucs", "--two-stems=vocals", "-o", str(norm_path.parent), str(norm_path)], check=True)
+    return vocals_path
+
+def beats_step(norm_path: Path, whisper_out: Path, force: bool) -> np.ndarray:
+    beat_file = whisper_out / "beat_times.json"
+    if beat_file.exists() and not force:
+        logger.info(f"Loading beats from {beat_file}")
+        with open(beat_file) as f:
+            return np.array(json.load(f))
+    logger.info("Detecting beats")
+    beat_times = detect_beats(norm_path)
+    with open(beat_file, 'w') as f:
+        json.dump(beat_times.tolist(), f)
+    return beat_times
+
+def transcription_step(vocals_path: Path, lyrics_path: Path, whisper_out: Path, force: bool) -> Path:
+    target_json = whisper_out / "aligned_vocals.json"
+    
+    if target_json.exists() and not force:
+        return target_json
+
+    if not lyrics_path.exists():
+        raise FileNotFoundError(f"Lyrics file not found for batch processing: {lyrics_path}")
+
+    logger.info(f"Running Forced Alignment for: {lyrics_path.name}")
+    segments = get_lyrics_alignment(vocals_path, lyrics_path)
+    
+    with open(target_json, "w", encoding="utf-8") as f:
+        json.dump(segments, f, ensure_ascii=False, indent=2)
+        
+    return target_json
+
+def subtitles_step(json_file: Path, ass_file: Path, force: bool, beat_file: Path = None) -> None:
+    if ass_file.exists() and not force:
+        return
+    logger.info(f"Generating ASS: {ass_file.name}")
+    ass_from_json(json_file, ass_file, beat_file=beat_file)
+
+def visualizer_step(norm_path: Path, beat_times: np.ndarray, frame_dir: Path, force: bool) -> None:
+    frame_dir.mkdir(exist_ok=True)
+    if list(frame_dir.glob("*.png")) and not force:
+        return
+    logger.info("Generating visualizer frames")
+    generate_visualizer_frames(norm_path, beat_times, frame_dir)
+
+def render_step(frame_dir: Path, norm_path: Path, ass_file: Path, mp4_path: Path, bg_source: Path) -> Path:
+    logger.info(f"Final Render with background: {bg_source.name}")
+    
+    # Sanitize ASS path for FFmpeg filter
+    ass_path_fixed = str(ass_file.absolute()).replace("\\", "/").replace(":", "\\:")
+    
+    # Determine if the background is a video or an image
+    is_video = bg_source.suffix.lower() == ".mp4"
+    
+    # Build Input list
+    # Input 0: Background (Video or Image)
+    # Input 1: Visualizer Frames
+    # Input 2: Audio
+    cmd = ["ffmpeg", "-y"]
+    
+    if is_video:
+        # Stream loop for video
+        cmd += ["-stream_loop", "-1", "-i", str(bg_source)]
+    else:
+        # Standard loop for image
+        cmd += ["-loop", "1", "-i", str(bg_source)]
+
+    cmd += [
+        "-framerate", str(FPS), "-i", str(frame_dir / "frame_%05d.png"),
+        "-i", str(norm_path),
+        "-filter_complex",
+        # [0:v] is the background, [1:v] is the visualizer overlay
+        f"[0:v]scale={VIDEO_RES[0]}:{VIDEO_RES[1]},setsar=1[bg];"
+        f"[1:v]scale={VIDEO_RES[0]}:{VIDEO_RES[1]},setsar=1[vis];"
+        f"[bg][vis]overlay=0:0[v];"
+        f"[v]ass='{ass_path_fixed}'[outv]",
+        "-map", "[outv]", 
+        "-map", "2:a",
+        "-c:v", "libx264", 
+        "-pix_fmt", "yuv420p", 
+        "-crf", "18",
+        "-c:a", "aac", 
+        "-b:a", "192k", 
+        "-shortest",
+        str(mp4_path)
+    ]
+    
+    subprocess.run(cmd, check=True)
+
+# -------------------
+# Batch Processor
+# -------------------
+
+# -------------------
+# Processing Logic
+# -------------------
+# --- Step Wrappers (Simplified for clarity) ---
+def get_norm_path(mp3_path): return mp3_path.with_name(f"{mp3_path.stem}_norm.wav")
+
+def process_file(mp3_path: Path):
+    basename = mp3_path.stem
+    final_output = MP4_DIR / f"{basename}.mp4"
+    if args.filename and args.filename != basename: return
+    if final_output.exists() and not args.force: return
+
+    song_cfg = load_song_config(basename)
+    do_upscale = args.upscale or song_cfg.get("upscale", False)
+    THEME = song_cfg.get("theme", "neon_puls")
+
+    # Discover Background
+    bg_source = next((f for f in [MP3_DIR/f"{basename}_loop.mp4", MP3_DIR/f"{basename}_loopmr.mp4", 
+                                  MP3_DIR/f"{basename}.png", MP3_DIR/"bg.png"] if f.exists()), None)
+
+    # Paths
+    whisper_out = OUT_DIR / basename
+    whisper_out.mkdir(exist_ok=True)
+    norm_path = get_norm_path(mp3_path)
+    ass_file = whisper_out / f"{basename}.ass"
+    json_file = whisper_out / "aligned_vocals.json"
+
+    logger.info(f"🚀 Processing: {basename} | Upscale: {do_upscale}")
+
+    # Execution
+    if 'normalize' in requested_steps: normalize_audio(mp3_path)
+    if 'vocals' in requested_steps: 
+        subprocess.run(["demucs", "--two-stems=vocals", "-o", str(OUT_DIR), str(norm_path)], check=True)
+    
+    if 'transcription' in requested_steps:
+            # 1. Handle Demucs naming convention: 
+            # Output folder is {OUT_DIR} / {model_name} / {input_filename_stem}
+            # Note: Demucs usually preserves underscores but check if your basename has spaces
+            model_name = "htdemucs" 
+            
+            # We target the specific folder Demucs just created
+            demucs_out_dir = OUT_DIR / model_name / f"{basename}_norm"
+            vocals = demucs_out_dir / "vocals.wav"
+            
+            # Fallback check: if the _norm suffix isn't there
+            if not vocals.exists():
+                vocals = OUT_DIR / model_name / basename / "vocals.wav"
+
+            if not vocals.exists():
+                raise FileNotFoundError(f"❌ Demucs output not found at {vocals}. Check folder: {OUT_DIR/model_name}")
+
+            logger.info(f"🎤 Aligning lyrics using: {vocals}")
+            segments = get_lyrics_alignment(vocals, mp3_path.with_suffix(".txt"))
+            with open(json_file, "w") as f: 
+                json.dump(segments, f, indent=2)
+
+    # 1. Handle Subtitles
+    if 'subtitles' in requested_steps:
+        target_res = (1920, 1080) if do_upscale else (854, 480)
+        # Font size for 480p is 14, for 1080p we jump to ~55
+        fs = song_cfg.get("font_size", 55 if do_upscale else 14)
+        ass_from_json(json_file, ass_file, fontsize=fs, resolution=target_res)
+
+
+    # 2. Logic for rendering
+    if 'render' in requested_steps:
+        from src.render_engine import get_audio_metadata
+        metadata = get_audio_metadata(norm_path)
+        
+        test_limit = (12 * FPS) if args.test_render else None
+
+        if do_upscale:
+            temp_480 = OUT_DIR / f"{basename}_raw_480.mp4"
+            logger.info("🎬 Rendering 480p RAW (Visuals only)...")
+            
+
+            run_integrated_render_gpu(
+                audio_path=norm_path, 
+                ass_file=None, 
+                bg_source=bg_source, 
+                output_path=temp_480, 
+                resolution=VIDEO_RES, 
+                fps=FPS, 
+                theme_name=THEME, 
+                limit_frames=test_limit
+            )
+            
+            logger.info("💎 AI Upscaling + 1080p UI Overlay...")
+            # This now calls the updated upscaler that handles metadata/subs in one pass
+            run_upscale(
+                input_path=temp_480, 
+                output_path=final_output, 
+                ass_path=ass_file, 
+                metadata=metadata, 
+                limit_frames=test_limit
+            )
+            
+            if temp_480.exists(): temp_480.unlink()
+        else:
+            logger.info("🎬 Rendering final 480p with UI...")
+            run_integrated_render_gpu(
+                audio_path=norm_path, 
+                ass_file=ass_file, 
+                bg_source=bg_source, 
+                output_path=final_output, 
+                resolution=VIDEO_RES, 
+                fps=FPS, 
+                theme_name=THEME,
+                limit_frames=test_limit
+            )
+
+
+def main():
+    for f in sorted(MP3_DIR.glob("*.mp3")):
+        try: process_file(f)
+        except Exception as e: logger.error(f"Error {f.name}: {e}")
+
+if __name__ == "__main__": main()

@@ -104,71 +104,95 @@ def get_lyrics_alignment(vocals_path: Path, lyrics_file: Path, max_words_per_lin
     return segments
 
 def ass_from_json(json_path, ass_path, beat_file=None, font="Arial Black", fontsize=32, resolution="854x480"):
-    """
-    Generates persistent 3-line viral subtitles.
-    Fetches song-specific colors from mp3_configs.json based on filename.
-    """
     import json
+    import logging
     from pathlib import Path
 
-    # 1. Config Loading Logic
-    config_path = Path("mp3_configs.json")
-    song_key = Path(json_path).stem.replace(" ", "_").upper()
-    highlight_color = "#00E6FF" # Default Gold
+    logger = logging.getLogger("subtitle_gen")
     
+    def fmt_time(seconds):
+        """Converts seconds to ASS time format H:MM:SS.cs"""
+        m, s = divmod(seconds, 60)
+        h, m = divmod(m, 60)
+        return f"{int(h)}:{int(m):02d}:{s:05.2f}"
+
+    # 1. Load the segments data
+    json_p = Path(json_path)
+    with open(json_p, "r", encoding="utf-8") as f:
+        segments = json.load(f)
+
+    # 2. Key Discovery Logic
+    config_path = Path("mp3_configs.json")
+    raw_stem = json_p.stem
+    search_origin = json_p.parent.name if raw_stem.lower() == "aligned_vocals" else raw_stem
+    song_key = search_origin.replace("_norm", "").replace("_norm".upper(), "").replace(" ", "_").replace("-", "_").upper()
+    
+    highlight_hex = "#00E6FF"
+    final_fontsize = fontsize
+    match_found = False
+
+    # 3. Config Loading Logic
     if config_path.exists():
         try:
             with open(config_path, "r") as f:
                 all_configs = json.load(f)
-                # Check if this specific song has a config
-                if song_key in all_configs:
-                    highlight_color = all_configs[song_key].get("highlight", highlight_color)
-                    fontsize = all_configs[song_key].get("font_size", fontsize)
-                    print(f"[INFO] Applied config for {song_key}: Color={highlight_color}")
+                conf = all_configs.get(song_key, next((all_configs[k] for k in all_configs if k in song_key), {}))
+                if conf:
+                    highlight_hex = conf.get("highlight", highlight_hex)
+                    # Use provided fontsize if config doesn't have one
+                    final_fontsize = conf.get("font_size", final_fontsize)
+                    match_found = True
         except Exception as e:
-            print(f"[WARNING] Could not read config file: {e}")
+            logger.error(f"Error reading {config_path}: {e}")
 
-    # 2. Hex to ASS Conversion
-    def hex_to_ass(hex_str):
-        clean_hex = hex_str.lstrip('#')
-        if len(clean_hex) == 6:
-            r, g, b = clean_hex[0:2], clean_hex[2:4], clean_hex[4:6]
-            return f"&H00{b}{g}{r}" 
-        return "&H0000E6FF" 
+    # 4. Color Conversion (BGR for ASS)
+    def hex_to_ass(h):
+        h = h.lstrip('#')
+        r, g, b = h[0:2], h[2:4], h[4:6]
+        return f"&H00{b}{g}{r}"
 
-    ass_highlight = hex_to_ass(highlight_color)
+    ass_highlight = hex_to_ass(highlight_hex)
+    
+    # 5. Handle Resolution & Scaling Logic
+    if isinstance(resolution, tuple):
+        res_x, res_y = resolution
+    else:
+        res_x, res_y = map(int, resolution.split('x'))
 
-    # 3. Process JSON Data
-    with open(json_path, "r", encoding="utf-8") as f:
-        segments = json.load(f)
+    # DYNAMIC SCALING: Adjust for 1080p canvas
+    # If res_y is 1080, we are roughly 2.25x larger than 480p.
+    scale_factor = res_y / 480.0
+    
+    # Apply scaling to the fontsize if it wasn't already scaled by the caller
+    # (Checking if the value seems small for a 1080p canvas)
+    if res_y > 720 and final_fontsize < 40:
+        final_fontsize = int(final_fontsize * scale_factor)
 
-    def fmt_time(t):
-        t = max(0, float(t))
-        h, m, s = int(t//3600), int((t%3600)//60), int(t%60)
-        cs = int(round((t - int(t)) * 100))
-        if cs == 100: s += 1; cs = 0
-        return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
-
-    res_x, res_y = map(int, resolution.split('x'))
-    center_y = res_y - 100 
-    line_spacing = fontsize + 15 
+    # Calculate positioning based on scaled resolution
+    center_y = res_y - int(100 * scale_factor) 
+    line_spacing = int((final_fontsize + 15) * 1.1) # Extra breathing room for larger fonts
+    outline_thickness = max(1, int(2 * scale_factor))
+    shadow_depth = max(1, int(1 * scale_factor))
 
     total_duration = segments[-1]["words"][-1]["end"] + 5.0 if segments else 300.0
 
+    # 6. Build .ASS Header with PlayRes and ScaledBorder
     lines = [f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {res_x}
 PlayResY: {res_y}
+ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Current,{font},{fontsize},&H00FFFFFF,{ass_highlight},&H00000000,&H80000000,-1,0,0,0,100,100,1,0,1,2,1,2,30,30,80,1
-Style: Faded,{font},{int(fontsize*0.8)},&H80AAAAAA,&H80AAAAAA,&H00000000,&H00000000,-1,0,0,0,100,100,1,0,1,1,0,2,30,30,80,1
+Style: Current,{font},{final_fontsize},&H00FFFFFF,{ass_highlight},&H00000000,&H80000000,-1,0,0,0,100,100,1,0,1,{outline_thickness},{shadow_depth},2,30,30,80,1
+Style: Faded,{font},{int(final_fontsize*0.8)},&H80AAAAAA,&H80AAAAAA,&H00000000,&H00000000,-1,0,0,0,100,100,1,0,1,1,0,2,30,30,80,1
 
 [Events]
 Format: Layer, Start, End, Style, Text
 """]
 
+    # 7. Generate Dialogue Lines
     for i in range(len(segments)):
         current_words = segments[i]["words"]
         display_start = current_words[0]["start"]
@@ -177,13 +201,16 @@ Format: Layer, Start, End, Style, Text
         start_str = fmt_time(display_start)
         end_str = fmt_time(display_end)
 
+        # Faded Past Text
         if i > 0:
             past_text = " ".join([w["word"] for w in segments[i-1]["words"]])
             lines.append(f"Dialogue: 1,{start_str},{end_str},Faded,{{\\fad(0,500)\\pos({res_x//2},{center_y - line_spacing})}}{past_text}")
 
+        # Current Karaoke Text
         payload = []
         for idx, w in enumerate(current_words):
             duration = w["end"] - w["start"]
+            # Join small gaps
             if idx < len(current_words) - 1:
                 gap = current_words[idx+1]["start"] - w["end"]
                 if 0 < gap < 0.2: duration += gap
@@ -192,10 +219,12 @@ Format: Layer, Start, End, Style, Text
         
         lines.append(f"Dialogue: 2,{start_str},{end_str},Current,{{\\pos({res_x//2},{center_y})}}{''.join(payload)}")
 
+        # Faded Future Text
         if i < len(segments) - 1:
             future_text = " ".join([w["word"] for w in segments[i+1]["words"]])
             lines.append(f"Dialogue: 1,{start_str},{end_str},Faded,{{\\fad(300,0)\\pos({res_x//2},{center_y + line_spacing})}}{future_text}")
 
+    # 8. Save
     ass_path.parent.mkdir(exist_ok=True, parents=True)
     with open(ass_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
