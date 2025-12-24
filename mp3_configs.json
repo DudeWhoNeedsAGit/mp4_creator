@@ -37,7 +37,7 @@
     },
     "ESTHER.EXE": {
             "highlight": "#B026FF",
-            "font_size": 27,
+            "font_size": 24,
             "upscale": true,
             "theme": "neon_pulse_numba"
     },
@@ -45,32 +45,51 @@
             "highlight": "#FF10F0",
             "font_size": 21,
             "upscale": true,
-            "theme": "neon_puls"
+            "theme": "neon_pulse_numba"
     },
     "EVA": {
         "highlight": "#FFD700",
-        "font_size": 25,
-        "note": "Gold - Divine Contrast"
+        "font_size": 24,
+        "note": "Gold - Divine Contrast",
+        "theme": "neon_pulse_numba"
     },
     "DEUS_SILENTIUM": {
         "highlight": "#F30808",
-        "font_size": 14,
+        "font_size": 23,
         "note": "Blood Red - High Aggression",
-        "gallery": "True"
+        "theme": "neon_pulse_numba"
     },
+    
     "ABOMINATIO_SYSTEMA___IGNIS_VERBI": {
-        "highlight": "#39FF14",
-        "font_size": 21,
-        "note": "Blood Red - High Aggression"
+        "highlight": "#F30808",
+        "font_size": 23,
+        "note": "Blood Red - High Aggression",
+        "theme": "neon_pulse_numba"
     },
+
     "ABOMINATIO_SYSTEMA___IGNIS VERBI_GOTH": {
         "highlight": "#FFD700",
-        "font_size": 21,
-        "note": "Gold - Divine Contrast"
+        "font_size": 23,
+        "note": "Gold - Divine Contrast",
+        "theme": "neon_pulse_numba"
         },
+
     "ABOMINATIO_SYSTEMA___IGNIS VERBI_LP": {
             "highlight": "#F30808",
-            "font_size": 21,
-            "note": "Blood Red - High Aggression"
+            "font_size": 23,
+            "note": "Blood Red - High Aggression",
+            "theme": "neon_pulse_numba"
+        },
+    "PRIME_EVIL": {
+            "highlight": "#F30808",
+            "font_size": 23,
+            "note": "Blood Red - High Aggression",
+            "theme": "neon_pulse_numba"
+        },
+    "PRIME_EVIL_STILL_ALIVE": {
+            "highlight": "#F30808",
+            "font_size": 23,
+            "note": "Blood Red - High Aggression",
+            "theme": "neon_pulse_numba"
         }
-}
+    }

@@ -6,7 +6,102 @@ from PIL import Image, ImageDraw
 from tqdm import tqdm
 from pathlib import Path
 from numba import njit, prange, uint8
+import logging
+logger = logging.getLogger(__name__)
 
+def extract_palette_from_bg(bg_path, n_colors=5, min_distance=180, min_hue_diff=60):
+    """Prioritizes dominant, enforces distance + hue separation."""
+    from PIL import Image
+    import numpy as np
+    import cv2
+    from sklearn.cluster import KMeans
+    import colorsys
+    import logging
+
+    logger = logging.getLogger(__name__)
+    logger.info(f"🎨 Quick palette extraction: {bg_path.name}")
+
+    if bg_path.suffix.lower() in [".mp4", ".mov"]:
+        cap = cv2.VideoCapture(str(bg_path))
+        cap.set(cv2.CAP_PROP_POS_FRAMES, 30)
+        ret, frame = cap.read()
+        cap.release()
+        if not ret:
+            frame = np.zeros((480, 854, 3), dtype=np.uint8)
+        image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    else:
+        image = cv2.cvtColor(cv2.imread(str(bg_path)), cv2.COLOR_BGR2RGB)
+
+    small = cv2.resize(image, (50, 50))
+    pixels = small.reshape(-1, 3)
+
+    kmeans = KMeans(n_clusters=n_colors*2, n_init=5, random_state=42)
+    kmeans.fit(pixels)
+    centers = kmeans.cluster_centers_.astype(int)
+    labels = kmeans.labels_
+    counts = np.bincount(labels)
+    order = np.argsort(-counts)
+
+    boosted = []
+    hues = []
+    for idx in order:
+        c = centers[idx]
+        r,g,b = c/255.0
+        h,s,v = colorsys.rgb_to_hsv(r,g,b)
+        s = max(s, 0.85)
+        v = max(v, 0.9)
+        r,g,b = colorsys.hsv_to_rgb(h,s,v)
+        boosted.append(np.array([int(r*255), int(g*255), int(b*255)], dtype=np.uint8))
+        hues.append(h * 360)
+
+    final = [boosted[0]]  # Force dominant
+    final_hues = [hues[0]]
+    logger.debug(f"Force accepted dominant: {boosted[0].tolist()} (hue {hues[0]:.0f}°)")
+
+    for i in range(1, len(boosted)):
+        c = boosted[i]
+        h = hues[i]
+        logger.debug(f"Checking candidate: {c.tolist()} (hue {h:.0f}°)")
+        if len(final) >= n_colors: break
+        dist_ok = all(np.linalg.norm(c - existing) >= min_distance for existing in final)
+        hue_ok = all(min(abs(h - fh) % 360, 360 - abs(h - fh)) >= min_hue_diff for fh in final_hues)
+        if dist_ok and hue_ok:
+            logger.debug(f"Accepted: {c.tolist()}")
+            final.append(c)
+            final_hues.append(h)
+        else:
+            logger.debug(f"Rejected (dist/hue): distances {[np.linalg.norm(c - e) for e in final]}, hue diffs {[min(abs(h - fh) % 360, 360 - abs(h - fh)) for fh in final_hues]}")
+
+    fallback = np.array([[0,255,255], [255,0,255], [0,255,127], [255,105,180], [0,128,255]], dtype=np.uint8)
+    fallback_hues = [180, 300, 150, 330, 210]  # Approx hues
+    i = 0
+    while len(final) < n_colors and i < len(fallback)*2:
+        f = fallback[i % len(fallback)]
+        fh = fallback_hues[i % len(fallback)]
+        logger.debug(f"Checking fallback: {f.tolist()} (hue {fh}°)")
+        dist_ok = all(np.linalg.norm(f - existing) >= min_distance for existing in final)
+        hue_ok = all(min(abs(fh - existing_h) % 360, 360 - abs(fh - existing_h)) >= min_hue_diff for existing_h in final_hues)
+        if dist_ok and hue_ok:
+            logger.debug("Accepted fallback")
+            final.append(f)
+            final_hues.append(fh)
+        i += 1
+
+    final_palette = np.array(final[:n_colors], dtype=np.uint8)
+
+    def approx_name(rgb):
+        r,g,b = rgb
+        if r > 200 and g < 100 and b < 100: return "red"
+        if r == g == 255: return "cyan"
+        if r == b == 255: return "magenta"
+        if g == b == 255: return "teal"
+        if b == 255: return "blue"
+        return "custom"
+
+    names = [f"{approx_name(c)} ({c.tolist()})" for c in final_palette]
+    logger.info(f"✅ Palette: {', '.join(names)}")
+
+    return final_palette
 
 # --- THEME LOADER ---
 
@@ -26,9 +121,9 @@ def load_visualizer_theme(theme_name):
     except Exception as e:
         print(f"Theme Load Warning: {e}. Falling back to hardcoded default.")
         return {
-            "type": "circular_bars",
-            "n_bars": 72, "base_radius": 110, "bar_width": 4, 
-            "sensitivity": 12.0, "decay": 0.92, "min_bar": 4,
+            "type": "neon_pulse_numba",
+            "n_bars": 80, "base_radius": 110, "bar_width": 4, 
+            "sensitivity": 1.5, "decay": 0.8, "min_bar": 4,
             "palette": [[255, 230, 0], [0, 255, 255], [255, 0, 255]]
         }
 
@@ -116,15 +211,22 @@ def render_circular_bars_numba(pixels, n_bars, base_r, bar_heights, palette, cen
 
 @njit(parallel=True, fastmath=True)
 def render_neon_puls_numba(pixels, n_bars, base_r, bar_heights, palette, center, bar_w):
-    """Numba port of your 'Good' PIL logic. Linear and sharp."""
+    """Numba port with smooth cyclic interpolation (last connects to first)."""
     cx, cy = center
+    n_colors = len(palette)
     
     for b in prange(n_bars):
-        # 1. Smooth Color Logic
-        t = b / n_bars  # Progress around the circle (0.0 to 1.0)
-        r, g, b_v = lerp_color(palette, t)
+        # Cyclic interpolation: t from 0 to 1, wraps seamlessly
+        t = b / n_bars
+        idx = t * n_colors
+        color_idx1 = int(idx) % n_colors
+        color_idx2 = (color_idx1 + 1) % n_colors
+        frac = idx - int(idx)
         
-        # 2. Geometry
+        r = int(palette[color_idx1][0] * (1 - frac) + palette[color_idx2][0] * frac)
+        g = int(palette[color_idx1][1] * (1 - frac) + palette[color_idx2][1] * frac)
+        b_v = int(palette[color_idx1][2] * (1 - frac) + palette[color_idx2][2] * frac)
+        
         angle = b * (2 * np.pi / n_bars) - np.pi / 2
         cos_a, sin_a = np.cos(angle), np.sin(angle)
         h = bar_heights[b]
@@ -132,8 +234,7 @@ def render_neon_puls_numba(pixels, n_bars, base_r, bar_heights, palette, center,
         x0, y0 = cx + base_r * cos_a, cy + base_r * sin_a
         x1, y1 = cx + (base_r + h) * cos_a, cy + (base_r + h) * sin_a
         
-        # 3. Draw Sharp Bar
-        draw_line_fast(pixels, x0, y0, x1, y1, bar_w, r, g, b_v)   
+        draw_line_fast(pixels, x0, y0, x1, y1, bar_w, r, g, b_v)
 
 @njit(fastmath=True)
 def draw_line_kernel(img, x0, y0, x1, y1, color, width):
@@ -514,7 +615,7 @@ def stream_visualizer_frames(audio_path, theme_name, fps, resolution):
         yield final_frame.tobytes()
 
 # --- STEP 2: THE MAIN STREAMER ---
-def stream_visualizer_frames_numba(audio_path, theme_name, fps, resolution, limit_frames=None):
+def stream_visualizer_frames_numba(audio_path, theme_name, fps, resolution, limit_frames=None, override_palette=None):
     import librosa
     import numpy as np
     
@@ -522,25 +623,37 @@ def stream_visualizer_frames_numba(audio_path, theme_name, fps, resolution, limi
     width, height = resolution
     center = (width // 2, height // 2)
     
+    # 1. Load Audio
     y, sr = librosa.load(audio_path, sr=None)
     hop = sr // fps
     n_frames = int(len(y) / hop) + 1
+    if limit_frames:
+        n_frames = min(n_frames, limit_frames)
     
+    # 2. Spectral Analysis (Matching your 2048 n_fft)
     S = np.abs(librosa.stft(y, n_fft=2048, hop_length=512))
     freq_times = librosa.frames_to_time(np.arange(S.shape[1]), sr=sr, hop_length=512)
     
+    # 3. Buffers
     trail_buffer = np.zeros((height, width, 4), dtype=np.uint8)
     current_frame_buffer = np.zeros((height, width, 4), dtype=np.uint8)
     
-    # Config Setup
+    # 4. Config & Dynamic Palette Setup
     n_bars = cfg.get("n_bars", 72)
     base_r = cfg.get("base_radius", 110)
     bar_w = cfg.get("bar_width", 4)
-    palette = np.array(cfg.get("palette", [[0, 255, 255]]), dtype=np.uint8)
+    
+    # Use the dynamic palette if it exists, else fall back to theme
+    if override_palette is not None:
+        palette = override_palette
+    else:
+        palette = np.array(cfg.get("palette", [[0, 255, 255]]), dtype=np.uint8)
+        
     sensitivity = cfg.get("sensitivity", 12.0)
     decay_rate = cfg.get("decay", 0.85)
     smooth_amp = 0.01
 
+    # 5. Main Rendering Loop
     for i in range(n_frames):
         stft_idx = np.searchsorted(freq_times, i / fps)
         current_spec = S[:, stft_idx] if stft_idx < S.shape[1] else np.zeros(S.shape[0])
@@ -548,22 +661,32 @@ def stream_visualizer_frames_numba(audio_path, theme_name, fps, resolution, limi
         # Physics (Momentum)
         start_s, end_s = i * hop, min((i+1) * hop, len(y))
         raw_amp = np.max(np.abs(y[start_s:end_s])) if start_s < len(y) else 0.01
-        if raw_amp > smooth_amp: smooth_amp = raw_amp
-        else: smooth_amp *= decay_rate
+        
+        if raw_amp > smooth_amp: 
+            smooth_amp = raw_amp
+        else: 
+            smooth_amp *= decay_rate
 
-        # Linear Mapping & 50x Height
+        # The "Good" Math: Linear Mapping & 50x Height
         bar_heights = np.zeros(n_bars, dtype=np.float32)
         spec_len = len(current_spec) // 3
         for b in range(n_bars):
             f_idx = int((b / n_bars) * spec_len)
+            f_idx = min(f_idx, spec_len - 1)
+            
+            # Using log1p scaling for that punchy reaction
             val = np.log1p(current_spec[f_idx] * sensitivity) * smooth_amp
             bar_heights[b] = val * 50
 
-        # Draw
+        # Draw Frame
         current_frame_buffer.fill(0)
+        
+        # Delegation: Ensure this matches your VIS_MAP or direct call
+        # Using draw_neon_puls as per your previous preference for smoothness
         render_neon_puls_numba(current_frame_buffer, n_bars, base_r, bar_heights, palette, center, bar_w)
 
         # The "Anti-Shadow" Compositor
+        # This keeps the motion blur but kills the dark gray residue
         apply_ghosting_and_composite(trail_buffer, current_frame_buffer, decay=0.7)
         
         yield trail_buffer.tobytes()
@@ -727,6 +850,12 @@ def run_integrated_render_gpu(audio_path, ass_file, bg_source, output_path, reso
     import subprocess
     from pathlib import Path
     from tqdm import tqdm
+    import numpy as np
+
+    # --- NEW: DYNAMIC PALETTE EXTRACTION ---
+    # We extract the palette once here
+    dynamic_palette = extract_palette_from_bg(bg_source, n_colors=3)
+    # ---------------------------------------
 
     # 1. Metadata & Settings
     meta = get_audio_metadata(audio_path)
@@ -735,13 +864,11 @@ def run_integrated_render_gpu(audio_path, ass_file, bg_source, output_path, reso
     if limit_frames:
         total_frames = min(total_frames, limit_frames)
 
-    # --- SUBTITLE PATH PROTECTION ---
     if ass_file is not None:
-        # Convert to absolute path and sanitize for FFmpeg
         ass_path_fixed = str(Path(ass_file).absolute()).replace("\\", "/").replace(":", "\\:")
         ass_filter = f",ass='{ass_path_fixed}'"
     else:
-        ass_filter = "" # No subtitle filter if ass_file is None
+        ass_filter = ""
 
     # 2. ESCAPE STRINGS
     safe_title = meta['title'].replace(":", "\\:")
@@ -752,20 +879,16 @@ def run_integrated_render_gpu(audio_path, ass_file, bg_source, output_path, reso
     # 3. BUILD COMMAND
     cmd = ["ffmpeg", "-y", "-loglevel", "error"]
 
-    # Input 0: Background
     is_video = bg_source.suffix.lower() == ".mp4"
     is_mirror_loop = "_loopmr" in bg_source.name.lower()
 
     if is_video:
         if not is_mirror_loop:
             cmd += ["-stream_loop", "-1"]
-        # ADD THIS: Force FFmpeg to ignore any audio in the background file
         cmd += ["-an"]
-
 
     cmd += ["-i", str(bg_source)]
 
-    # Input 1: Visualizer Pipe, Input 2: Audio
     cmd += [
         "-f", "rawvideo", "-vcodec", "rawvideo", "-s", res_str,
         "-pix_fmt", "rgba", "-framerate", str(fps), "-i", "-",
@@ -780,13 +903,9 @@ def run_integrated_render_gpu(audio_path, ass_file, bg_source, output_path, reso
             f"[prep_bwd]reverse[bwd];"
             f"[fwd][bwd]concat=n=2:v=1:a=0,loop=-1:size=600[bg];"
         )
-        
     else:
         bg_chain = f"[0:v]fps={fps},scale={resolution[0]}:{resolution[1]}:force_original_aspect_ratio=increase,crop={resolution[0]}:{resolution[1]},setsar=1[bg];"
     
-    # 4. FILTER COMPLEX
-    # Logic: If ass_file is None, we are likely doing a pre-pass for upscaling.
-    # We remove the drawtext filters to keep the frames clean for the AI.
     if ass_file is not None:
         text_overlays = (
             f"[v1]drawtext=text='{safe_title}':fontcolor=white:fontsize=14:x=20:y=(h/2)-40:shadowcolor=black@0.5:shadowx=2:shadowy=2,"
@@ -795,7 +914,6 @@ def run_integrated_render_gpu(audio_path, ass_file, bg_source, output_path, reso
             f"{ass_filter}[outv]"
         )
     else:
-        # PURE VISUALS PASS: No text to avoid AI artifacts/blurring
         text_overlays = "[v1]copy[outv]"
 
     cmd += [
@@ -803,7 +921,6 @@ def run_integrated_render_gpu(audio_path, ass_file, bg_source, output_path, reso
         f"{bg_chain}[1:v]format=rgba[vis];[bg][vis]overlay=0:0:shortest=1[v1];{text_overlays}",
         "-map", "[outv]",
         "-map", "2:a",
-        
         "-c:v", "h264_nvenc", 
         "-preset", "p4", "-tune", "hq", "-rc", "vbr", "-cq", "20", "-pix_fmt", "yuv420p", 
         "-c:a", "aac", "-b:a", "192k", "-shortest", str(output_path)
@@ -813,13 +930,17 @@ def run_integrated_render_gpu(audio_path, ass_file, bg_source, output_path, reso
     process = subprocess.Popen(cmd, stdin=subprocess.PIPE)
 
     try:
-        # Pass the calculated total_frames to tqdm
         with tqdm(total=total_frames, desc=f"🎬 Rendering {theme_name}", unit="frame") as pbar:
-            # Add enumerate to track frame count
-            for i, frame_bytes in enumerate(stream_visualizer_frames_numba(audio_path, theme_name, fps, resolution)):
+            # PASS THE DYNAMIC PALETTE into the streamer
+            # Note: You'll need to update your streamer to accept 'override_palette'
+            frames_gen = stream_visualizer_frames_numba(
+                audio_path, theme_name, fps, resolution, 
+                override_palette=dynamic_palette
+            )
+            
+            for i, frame_bytes in enumerate(frames_gen):
                 if limit_frames and i >= limit_frames:
                     break
-                
                 process.stdin.write(frame_bytes)
                 pbar.update(1)
     finally:
